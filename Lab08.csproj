@@ -9,8 +9,4 @@
     <RootNamespace>SmoModeling</RootNamespace>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="ScottPlot" Version="4.1.71" />
-  </ItemGroup>
-
 </Project>
