@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using ScottPlot;
 
 namespace SmoModeling
 {
@@ -30,11 +29,9 @@ namespace SmoModeling
 
     public class ServiceChannel
     {
-        // IsBusy меняется только внутри Server под локом — поэтому internal set
         public int  Id     { get; }
         public bool IsBusy { get; internal set; }
 
-        // Каждый канал имеет свой Random, созданный один раз
         private readonly Random _rng;
         private readonly double _serviceRate;
 
@@ -43,33 +40,27 @@ namespace SmoModeling
             Id           = id;
             _serviceRate = serviceRate;
             IsBusy       = false;
-            // Разные seed для каждого канала, чтобы не совпадали последовательности
             _rng = new Random(Guid.NewGuid().GetHashCode());
         }
 
         public async Task ProcessRequest(Request request)
         {
             request.StartTime = DateTime.Now;
-
             double serviceTime = -Math.Log(1.0 - _rng.NextDouble()) / _serviceRate;
             await Task.Delay(TimeSpan.FromSeconds(serviceTime));
-
             request.EndTime = DateTime.Now;
         }
     }
-    
+
     public class Server
     {
         private readonly List<ServiceChannel> _channels;
         private readonly object _lock = new object();
 
-        // Статистика
         private int    _totalRequests     = 0;
         private int    _processedRequests = 0;
         private int    _rejectedRequests  = 0;
 
-        // Для корректного расчёта среднего числа занятых каналов:
-        // накапливаем сумму (занятых_каналов × dt) по времени
         private double _busyChannelSeconds = 0.0;
         private DateTime _lastSnapshotTime;
         private readonly DateTime _startTime;
@@ -80,7 +71,7 @@ namespace SmoModeling
             for (int i = 0; i < channelCount; i++)
                 _channels.Add(new ServiceChannel(i + 1, serviceRate));
 
-            _startTime       = DateTime.Now;
+            _startTime        = DateTime.Now;
             _lastSnapshotTime = _startTime;
         }
 
@@ -93,19 +84,17 @@ namespace SmoModeling
         {
             try
             {
-                ServiceChannel freeChannel = null;
+                ServiceChannel? freeChannel = null;
 
                 lock (_lock)
                 {
-                    // Снимок занятости перед изменением состояния
                     TakeSnapshot();
-
                     _totalRequests++;
 
                     freeChannel = _channels.FirstOrDefault(c => !c.IsBusy);
                     if (freeChannel != null)
                     {
-                        freeChannel.IsBusy = true;   // захватываем канал под локом
+                        freeChannel.IsBusy = true;
                         _processedRequests++;
                     }
                     else
@@ -116,27 +105,26 @@ namespace SmoModeling
 
                 if (freeChannel != null)
                 {
-                    // Обработка происходит вне лока (долгая операция)
                     await freeChannel.ProcessRequest(e.Request);
 
                     lock (_lock)
                     {
-                        TakeSnapshot();              // ещё один снимок после завершения
-                        freeChannel.IsBusy = false;  // освобождаем канал под локом
+                        TakeSnapshot();
+                        freeChannel.IsBusy = false;
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[Server] Ошибка обработки запроса: {ex.Message}");
+                Console.Error.WriteLine($"[Server] Ошибка: {ex.Message}");
             }
         }
 
         private void TakeSnapshot()
         {
-            var now    = DateTime.Now;
-            double dt  = (now - _lastSnapshotTime).TotalSeconds;
-            int busy   = _channels.Count(c => c.IsBusy);
+            var now   = DateTime.Now;
+            double dt = (now - _lastSnapshotTime).TotalSeconds;
+            int busy  = _channels.Count(c => c.IsBusy);
             _busyChannelSeconds += busy * dt;
             _lastSnapshotTime   = now;
         }
@@ -145,11 +133,8 @@ namespace SmoModeling
         {
             lock (_lock)
             {
-                TakeSnapshot();   // финальный снимок
-
+                TakeSnapshot();
                 double uptime = (DateTime.Now - _startTime).TotalSeconds;
-
-
                 double avgBusy = uptime > 0 ? _busyChannelSeconds / uptime : 0;
 
                 return new Statistics
@@ -168,11 +153,11 @@ namespace SmoModeling
         {
             lock (_lock)
             {
-                _totalRequests     = 0;
-                _processedRequests = 0;
-                _rejectedRequests  = 0;
+                _totalRequests      = 0;
+                _processedRequests  = 0;
+                _rejectedRequests   = 0;
                 _busyChannelSeconds = 0;
-                _lastSnapshotTime  = DateTime.Now;
+                _lastSnapshotTime   = DateTime.Now;
             }
         }
     }
@@ -182,19 +167,16 @@ namespace SmoModeling
         public int    TotalRequests     { get; set; }
         public int    ProcessedRequests { get; set; }
         public int    RejectedRequests  { get; set; }
-        public double AvgBusyChannels   { get; set; }   // k̄  = ∫busy dt / T
+        public double AvgBusyChannels   { get; set; }
         public double Uptime            { get; set; }
         public int    ChannelCount      { get; set; }
 
-        // P_отк = отклонённых / всего поступивших
         public double ProbabilityRejection =>
             TotalRequests > 0 ? (double)RejectedRequests / TotalRequests : 0;
 
-        // Q = обслуженных / всего поступивших
         public double RelativeThroughput =>
             TotalRequests > 0 ? (double)ProcessedRequests / TotalRequests : 0;
 
-        // A = обслуженных / время (запросов в секунду)
         public double AbsoluteThroughput =>
             Uptime > 0 ? ProcessedRequests / Uptime : 0;
 
@@ -208,10 +190,9 @@ namespace SmoModeling
         public int Id { get; }
 
         private readonly double _requestRate;
-        // Один Random на клиента, создан один раз с уникальным seed
         private readonly Random _rng = new Random(Guid.NewGuid().GetHashCode());
 
-        public event EventHandler<RequestEventArgs> RequestGenerated;
+        public event EventHandler<RequestEventArgs>? RequestGenerated;
 
         public Client(double requestRate)
         {
@@ -245,26 +226,24 @@ namespace SmoModeling
         {
             double rho = lambda / mu;
 
-            // P0 = 1 / sum_{k=0}^{n} rho^k / k!
             double sum = 0;
             for (int k = 0; k <= n; k++)
                 sum += Math.Pow(rho, k) / Factorial(k);
             double p0 = 1.0 / sum;
 
-            // P_n (вероятность отказа — формула Эрланга)
             double pRejection = (Math.Pow(rho, n) / Factorial(n)) * p0;
 
-            double Q = 1.0 - pRejection;           // относительная пропускная способность
-            double A = lambda * Q;                  // абсолютная пропускная способность
-            double kAvg = rho * Q;                  // среднее число занятых каналов
+            double Q    = 1.0 - pRejection;
+            double A    = lambda * Q;
+            double kAvg = rho * Q;
 
             return new TheoreticalResults
             {
-                ProbabilityIdle       = p0,
-                ProbabilityRejection  = pRejection,
-                RelativeThroughput    = Q,
-                AbsoluteThroughput    = A,
-                AvgBusyChannels       = kAvg
+                ProbabilityIdle      = p0,
+                ProbabilityRejection = pRejection,
+                RelativeThroughput   = Q,
+                AbsoluteThroughput   = A,
+                AvgBusyChannels      = kAvg
             };
         }
 
@@ -287,29 +266,25 @@ namespace SmoModeling
 
     public class DataPoint
     {
-        public double Lambda              { get; set; }
-
-        // Экспериментальные
-        public double ExpIdle             { get; set; }
-        public double ExpRejection        { get; set; }
-        public double ExpRelative         { get; set; }
-        public double ExpAbsolute         { get; set; }
-        public double ExpAvgBusy          { get; set; }
-
-        // Теоретические
-        public double TheoIdle            { get; set; }
-        public double TheoRejection       { get; set; }
-        public double TheoRelative        { get; set; }
-        public double TheoAbsolute        { get; set; }
-        public double TheoAvgBusy         { get; set; }
+        public double Lambda         { get; set; }
+        public double ExpIdle        { get; set; }
+        public double ExpRejection   { get; set; }
+        public double ExpRelative    { get; set; }
+        public double ExpAbsolute    { get; set; }
+        public double ExpAvgBusy     { get; set; }
+        public double TheoIdle       { get; set; }
+        public double TheoRejection  { get; set; }
+        public double TheoRelative   { get; set; }
+        public double TheoAbsolute   { get; set; }
+        public double TheoAvgBusy    { get; set; }
     }
 
     class Program
     {
-        private const int    ChannelCount      = 5;    // n — число каналов
-        private const double Mu                = 2.0;  // μ — интенсивность обслуживания
-        private const int    SimulationSeconds = 30;   // время одного эксперимента
-        private const int    ClientCount       = 5;    // число клиентов
+        private const int    ChannelCount      = 5;
+        private const double Mu                = 2.0;
+        private const int    SimulationSeconds = 30;
+        private const int    ClientCount       = 5;
 
         static async Task Main(string[] args)
         {
@@ -317,7 +292,6 @@ namespace SmoModeling
             Console.WriteLine($"  Каналов n = {ChannelCount},  μ = {Mu} зап/с,  время опыта = {SimulationSeconds} с");
             Console.WriteLine();
 
-            // λ от 0.5 до 5.5 с шагом 0.5 → 11 точек
             var lambdaValues = Enumerable.Range(1, 11)
                                          .Select(i => Math.Round(i * 0.5, 1))
                                          .ToList();
@@ -350,24 +324,22 @@ namespace SmoModeling
                 try { await Task.WhenAll(tasks); }
                 catch (OperationCanceledException) { }
 
-                var stats   = server.GetStatistics();
-                var theor   = SmoTheory.Calculate(lambda, Mu, ChannelCount);
+                var stats = server.GetStatistics();
+                var theor = SmoTheory.Calculate(lambda, Mu, ChannelCount);
 
                 var pt = new DataPoint
                 {
-                    Lambda         = lambda,
-
-                    ExpIdle        = stats.ProbabilityIdle,
-                    ExpRejection   = stats.ProbabilityRejection,
-                    ExpRelative    = stats.RelativeThroughput,
-                    ExpAbsolute    = stats.AbsoluteThroughput,
-                    ExpAvgBusy     = stats.AvgBusyChannels,
-
-                    TheoIdle       = theor.ProbabilityIdle,
-                    TheoRejection  = theor.ProbabilityRejection,
-                    TheoRelative   = theor.RelativeThroughput,
-                    TheoAbsolute   = theor.AbsoluteThroughput,
-                    TheoAvgBusy    = theor.AvgBusyChannels,
+                    Lambda        = lambda,
+                    ExpIdle       = stats.ProbabilityIdle,
+                    ExpRejection  = stats.ProbabilityRejection,
+                    ExpRelative   = stats.RelativeThroughput,
+                    ExpAbsolute   = stats.AbsoluteThroughput,
+                    ExpAvgBusy    = stats.AvgBusyChannels,
+                    TheoIdle      = theor.ProbabilityIdle,
+                    TheoRejection = theor.ProbabilityRejection,
+                    TheoRelative  = theor.RelativeThroughput,
+                    TheoAbsolute  = theor.AbsoluteThroughput,
+                    TheoAvgBusy   = theor.AvgBusyChannels,
                 };
                 points.Add(pt);
 
@@ -380,12 +352,15 @@ namespace SmoModeling
 
             Directory.CreateDirectory("result");
             SaveResultsTxt(points);
-            SaveCharts(points);
+            SaveCsv(points);
 
             Console.WriteLine();
             Console.WriteLine("Готово! Файлы:");
             Console.WriteLine("  result/results.txt");
-            Console.WriteLine("  result/p-1.png  ... result/p-5.png");
+            Console.WriteLine("  result/data.csv");
+            Console.WriteLine();
+            Console.WriteLine("Для построения графиков запустите:");
+            Console.WriteLine("  python3 result/plot.py");
         }
 
         static void SaveResultsTxt(List<DataPoint> pts)
@@ -393,7 +368,7 @@ namespace SmoModeling
             using var w = new StreamWriter("result/results.txt", false, System.Text.Encoding.UTF8);
             w.WriteLine("РЕЗУЛЬТАТЫ МОДЕЛИРОВАНИЯ МНОГОКАНАЛЬНОЙ СМО С ОТКАЗАМИ (M/M/n/n)");
             w.WriteLine("=================================================================");
-            w.WriteLine($"n = {ChannelCount} канала,  μ = {Mu} зап/с,  время опыта = {SimulationSeconds} с");
+            w.WriteLine($"n = {ChannelCount} каналов,  μ = {Mu} зап/с,  время опыта = {SimulationSeconds} с");
             w.WriteLine();
 
             string hdr = $"{"λ",5} | {"P0 эксп",8} | {"P0 теор",8} | {"Pотк эксп",10} | {"Pотк теор",10}" +
@@ -420,73 +395,67 @@ namespace SmoModeling
             w.WriteLine("5. Экспериментальные данные хорошо согласуются с теоретическими.");
         }
 
-        static void SaveCharts(List<DataPoint> pts)
+        static void SaveCsv(List<DataPoint> pts)
         {
-            double[] xs = pts.Select(p => p.Lambda).ToArray();
+            // Сохраняем данные в CSV для построения графиков через Python
+            using var w = new StreamWriter("result/data.csv", false, System.Text.Encoding.UTF8);
+            w.WriteLine("lambda,exp_idle,theo_idle,exp_rejection,theo_rejection," +
+                        "exp_relative,theo_relative,exp_absolute,theo_absolute," +
+                        "exp_avg_busy,theo_avg_busy");
 
-            PlotPair(xs,
-                pts.Select(p => p.ExpIdle).ToArray(),
-                pts.Select(p => p.TheoIdle).ToArray(),
-                "Вероятность простоя системы P₀",
-                "P₀",
-                "result/p-1.png");
+            foreach (var p in pts)
+            {
+                w.WriteLine(string.Format(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10}",
+                    p.Lambda,
+                    p.ExpIdle, p.TheoIdle,
+                    p.ExpRejection, p.TheoRejection,
+                    p.ExpRelative, p.TheoRelative,
+                    p.ExpAbsolute, p.TheoAbsolute,
+                    p.ExpAvgBusy, p.TheoAvgBusy));
+            }
 
-            PlotPair(xs,
-                pts.Select(p => p.ExpRejection).ToArray(),
-                pts.Select(p => p.TheoRejection).ToArray(),
-                "Вероятность отказа Pотк",
-                "Pотк",
-                "result/p-2.png");
+            // Записываем рядом Python-скрипт для графиков
+            using var py = new StreamWriter("result/plot.py", false, System.Text.Encoding.UTF8);
+            py.WriteLine(@"import csv
+import matplotlib.pyplot as plt
+import os
 
-            PlotPair(xs,
-                pts.Select(p => p.ExpRelative).ToArray(),
-                pts.Select(p => p.TheoRelative).ToArray(),
-                "Относительная пропускная способность Q",
-                "Q",
-                "result/p-3.png");
+data = []
+with open(os.path.join(os.path.dirname(__file__), 'data.csv'), newline='') as f:
+    reader = csv.DictReader(f)
+    for row in reader:
+        data.append({k: float(v) for k, v in row.items()})
 
-            PlotPair(xs,
-                pts.Select(p => p.ExpAbsolute).ToArray(),
-                pts.Select(p => p.TheoAbsolute).ToArray(),
-                "Абсолютная пропускная способность A, зап/с",
-                "A",
-                "result/p-4.png");
+xs = [d['lambda'] for d in data]
 
-            PlotPair(xs,
-                pts.Select(p => p.ExpAvgBusy).ToArray(),
-                pts.Select(p => p.TheoAvgBusy).ToArray(),
-                "Среднее число занятых каналов k̄",
-                "k̄",
-                "result/p-5.png");
-        }
+charts = [
+    ('exp_idle',       'theo_idle',       'Вероятность простоя системы P₀',          'P₀',    'p-1.png'),
+    ('exp_rejection',  'theo_rejection',  'Вероятность отказа Pотк',                  'Pотк',  'p-2.png'),
+    ('exp_relative',   'theo_relative',   'Относительная пропускная способность Q',   'Q',     'p-3.png'),
+    ('exp_absolute',   'theo_absolute',   'Абсолютная пропускная способность A',      'A',     'p-4.png'),
+    ('exp_avg_busy',   'theo_avg_busy',   'Среднее число занятых каналов k',          'k',     'p-5.png'),
+]
 
-        static void PlotPair(
-            double[] xs,
-            double[] expY,
-            double[] theoY,
-            string title,
-            string yLabel,
-            string filePath)
-        {
-            var plt = new Plot(700, 450);
+out_dir = os.path.dirname(__file__)
 
-            var expLine  = plt.AddScatterLines(xs, expY,  System.Drawing.Color.SteelBlue,  2f);
-            expLine.MarkerShape = ScottPlot.MarkerShape.filledCircle;
-            expLine.MarkerSize  = 6;
-            expLine.Label       = "Экспериментальные";
+for exp_key, theo_key, title, ylabel, filename in charts:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(xs, [d[exp_key]  for d in data], 'o-', color='steelblue', label='Экспериментальные')
+    ax.plot(xs, [d[theo_key] for d in data], 's-', color='crimson',   label='Теоретические')
+    ax.set_title(title)
+    ax.set_xlabel('Интенсивность входного потока λ (зап/с)')
+    ax.set_ylabel(ylabel)
+    ax.legend()
+    ax.grid(True)
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, filename), dpi=100)
+    plt.close(fig)
+    print(f'Сохранён {filename}')
 
-            var theoLine = plt.AddScatterLines(xs, theoY, System.Drawing.Color.Crimson, 2f);
-            theoLine.MarkerShape = ScottPlot.MarkerShape.filledSquare;
-            theoLine.MarkerSize  = 6;
-            theoLine.Label       = "Теоретические";
-
-            plt.Title(title);
-            plt.XLabel("Интенсивность входного потока λ (зап/с)");
-            plt.YLabel(yLabel);
-            plt.Legend(location: Alignment.UpperRight);
-            plt.SetAxisLimitsX(xs.Min() - 0.2, xs.Max() + 0.2);
-
-            plt.SaveFig(filePath);
+print('Все графики готовы.')
+");
         }
     }
 }
